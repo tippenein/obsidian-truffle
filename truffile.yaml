@@ -1,0 +1,51 @@
+metadata:
+  name: "obsidian"
+  bundle_id: org.truffle.obsidian.truffle
+  description: |
+    Bridge multiple Obsidian vaults across your Tailscale tailnet.
+    Read, write, search, and copy notes between any configured nodes.
+  icon_file: ./icon.png
+  foreground:
+    process:
+      cmd:
+        - python
+        - obsidian_truffle_foreground.py
+      working_directory: /
+      environment:
+        PYTHONUNBUFFERED: "1"
+        OBSIDIAN_NODES: "REPLACE_WITH_OBSIDIAN_NODES_JSON"
+  background:
+    process:
+      cmd:
+        - python
+        - obsidian_truffle_background.py
+      working_directory: /
+      environment:
+        PYTHONUNBUFFERED: "1"
+        OBSIDIAN_NODES: "REPLACE_WITH_OBSIDIAN_NODES_JSON"
+    default_schedule:
+      type: interval
+      interval:
+        duration: 15m
+        schedule:
+          daily_window: "00:00-23:59"
+
+steps:
+  - name: Install Python dependencies
+    type: bash
+    run: |
+      pip install --no-cache-dir "httpx>=0.27.0"
+
+  - name: Copy application files
+    type: files
+    files:
+      - source: ./config.py
+        destination: ./config.py
+      - source: ./obsidian_client.py
+        destination: ./obsidian_client.py
+      - source: ./bg_worker.py
+        destination: ./bg_worker.py
+      - source: ./obsidian_truffle_foreground.py
+        destination: ./obsidian_truffle_foreground.py
+      - source: ./obsidian_truffle_background.py
+        destination: ./obsidian_truffle_background.py
