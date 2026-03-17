@@ -8,6 +8,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from config import NodeConfig, parse_nodes
+from local_client import LocalVaultClient
 from obsidian_client import ObsidianClient
 
 logger = logging.getLogger("obsidian.bg_worker")
@@ -24,9 +25,12 @@ class BackgroundDigest:
 class ObsidianBackgroundWorker:
     def __init__(self) -> None:
         self._nodes: list[NodeConfig] = parse_nodes()
-        self._clients: dict[str, ObsidianClient] = {
-            node.name: ObsidianClient(node) for node in self._nodes
-        }
+        self._clients: dict[str, ObsidianClient | LocalVaultClient] = {}
+        for node in self._nodes:
+            if node.type == "local":
+                self._clients[node.name] = LocalVaultClient(node)
+            else:
+                self._clients[node.name] = ObsidianClient(node)
         self._last_reachable: dict[str, bool] = {}
         self._last_file_counts: dict[str, int] = {}
         self._is_seeded: bool = False

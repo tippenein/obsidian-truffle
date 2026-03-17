@@ -18,12 +18,17 @@ OBSIDIAN_NODES_RAW: str = os.getenv("OBSIDIAN_NODES", "[]")
 _NODES_FILE = Path(os.getenv("OBSIDIAN_NODES_FILE", "/data/obsidian_nodes.json"))
 
 
+DEFAULT_VAULTS_DIR = Path(os.getenv("OBSIDIAN_VAULTS_DIR", "/data/vaults"))
+
+
 @dataclass(frozen=True)
 class NodeConfig:
     name: str
-    host: str
-    api_key: str
-    port: int = 27124
+    type: str = "local"        # "local" or "remote"
+    path: str = ""             # filesystem path for local vaults
+    host: str = ""             # Tailscale IP/hostname for remote nodes
+    api_key: str = ""          # Bearer token for remote nodes
+    port: int = 27124          # REST API port for remote nodes
 
 
 def _parse_entries(raw: list) -> list[NodeConfig]:
@@ -33,15 +38,27 @@ def _parse_entries(raw: list) -> list[NodeConfig]:
         if not isinstance(entry, dict):
             logger.warning("Skipping node entry [%d]: not a dict", i)
             continue
-        try:
+        if "name" not in entry:
+            logger.warning("Skipping node entry [%d]: missing 'name'", i)
+            continue
+        node_type = entry.get("type", "remote")
+        if node_type == "local":
             nodes.append(NodeConfig(
                 name=entry["name"],
-                host=entry["host"],
-                api_key=entry["api_key"],
-                port=entry.get("port", 27124),
+                type="local",
+                path=entry.get("path", ""),
             ))
-        except KeyError as e:
-            logger.warning("Skipping node entry [%d]: missing key %s", i, e)
+        else:
+            try:
+                nodes.append(NodeConfig(
+                    name=entry["name"],
+                    type="remote",
+                    host=entry["host"],
+                    api_key=entry["api_key"],
+                    port=entry.get("port", 27124),
+                ))
+            except KeyError as e:
+                logger.warning("Skipping remote node entry [%d]: missing key %s", i, e)
     return nodes
 
 
@@ -107,15 +124,28 @@ def get_node(name: str) -> NodeConfig | None:
     return None
 
 
-def add_node(name: str, host: str, api_key: str, port: int = 27124) -> NodeConfig:
-    """Add or update a node in the persistent config file."""
-    node = NodeConfig(name=name, host=host, api_key=api_key, port=port)
+def _upsert_file_node(node: NodeConfig) -> None:
+    """Insert or replace a node in the persistent file by name."""
     file_nodes = _load_file_nodes()
-    # Replace existing by name, or append
-    lower = name.lower()
+    lower = node.name.lower()
     file_nodes = [n for n in file_nodes if n.name.lower() != lower]
     file_nodes.append(node)
     _save_file_nodes(file_nodes)
+
+
+def add_local_node(name: str, path: str | None = None) -> NodeConfig:
+    """Add a local vault node. Creates the vault directory if needed."""
+    vault_path = Path(path) if path else DEFAULT_VAULTS_DIR / name
+    vault_path.mkdir(parents=True, exist_ok=True)
+    node = NodeConfig(name=name, type="local", path=str(vault_path))
+    _upsert_file_node(node)
+    return node
+
+
+def add_remote_node(name: str, host: str, api_key: str, port: int = 27124) -> NodeConfig:
+    """Add a remote Obsidian REST API node."""
+    node = NodeConfig(name=name, type="remote", host=host, api_key=api_key, port=port)
+    _upsert_file_node(node)
     return node
 
 

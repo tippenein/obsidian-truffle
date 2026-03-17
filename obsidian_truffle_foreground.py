@@ -10,7 +10,11 @@ from typing import Any
 import httpx
 from app_runtime.mcp import create_mcp_server, run_mcp_server
 
-from config import NodeConfig, get_node, parse_nodes, add_node as config_add_node, remove_node as config_remove_node
+from config import (
+    NodeConfig, get_node, parse_nodes,
+    add_local_node, add_remote_node, remove_node as config_remove_node,
+)
+from local_client import LocalVaultClient
 from obsidian_client import ObsidianClient
 
 logger = logging.getLogger("obsidian.foreground")
@@ -18,7 +22,7 @@ logger.setLevel(logging.INFO)
 
 mcp = create_mcp_server("obsidian")
 
-_clients: dict[str, ObsidianClient] = {}
+_clients: dict[str, ObsidianClient | LocalVaultClient] = {}
 
 
 def _error(message: str, **extra: Any) -> dict[str, Any]:
@@ -33,10 +37,13 @@ def _success(message: str, **extra: Any) -> dict[str, Any]:
     return payload
 
 
-def _get_client(node: NodeConfig) -> ObsidianClient:
+def _get_client(node: NodeConfig) -> ObsidianClient | LocalVaultClient:
     """Get or create a client for the given node."""
     if node.name not in _clients:
-        _clients[node.name] = ObsidianClient(node)
+        if node.type == "local":
+            _clients[node.name] = LocalVaultClient(node)
+        else:
+            _clients[node.name] = ObsidianClient(node)
     return _clients[node.name]
 
 
@@ -69,12 +76,17 @@ async def list_nodes() -> dict[str, Any]:
         for node in nodes:
             client = _get_client(node)
             reachable = await client.ping()
-            results.append({
+            info: dict[str, Any] = {
                 "name": node.name,
-                "host": node.host,
-                "port": node.port,
+                "type": node.type,
                 "reachable": reachable,
-            })
+            }
+            if node.type == "local":
+                info["path"] = node.path
+            else:
+                info["host"] = node.host
+                info["port"] = node.port
+            results.append(info)
         online = sum(1 for r in results if r["reachable"])
         return _success(
             f"{online}/{len(results)} nodes reachable",
@@ -87,24 +99,20 @@ async def list_nodes() -> dict[str, Any]:
 
 
 @mcp.tool(
-    "add_node",
+    "create_vault",
     description=(
-        "Add or update an Obsidian vault node. Persists across restarts. "
-        "Parameters: name (str, required — friendly label like 'desktop'), "
-        "host (str, required — Tailscale IP or hostname), "
-        "api_key (str, required — Bearer token from the Obsidian Local REST API plugin), "
-        "port (int, optional, default 27124). "
-        "Returns: confirmation with node details."
+        "Create a new local Obsidian vault on this device. "
+        "Parameters: name (str, required — vault label like 'main' or 'work'), "
+        "path (str, optional — custom directory path; defaults to /data/vaults/<name>). "
+        "Returns: confirmation with vault path. The vault is immediately usable "
+        "with read_note, write_note, search_vault, etc."
     ),
 )
-async def add_node(
+async def create_vault(
     name: str,
-    host: str,
-    api_key: str,
-    port: int = 27124,
+    path: str | None = None,
 ) -> dict[str, Any]:
     try:
-        node = config_add_node(name, host, api_key, port)
         # Evict stale client if one exists
         if name in _clients:
             try:
@@ -112,11 +120,49 @@ async def add_node(
             except Exception:
                 pass
             del _clients[name]
+        node = add_local_node(name, path)
         client = _get_client(node)
         reachable = await client.ping()
         return _success(
-            f"Node '{name}' added ({host}:{port}, reachable={reachable})",
-            node={"name": name, "host": host, "port": port, "reachable": reachable},
+            f"Vault '{name}' created at {node.path}",
+            node={"name": name, "type": "local", "path": node.path, "reachable": reachable},
+        )
+    except Exception as e:
+        return _error(str(e))
+
+
+@mcp.tool(
+    "add_remote_node",
+    description=(
+        "Register a remote Obsidian vault (on another computer running the "
+        "Local REST API plugin over Tailscale). Persists across restarts. "
+        "Parameters: name (str, required — friendly label like 'desktop'), "
+        "host (str, required — Tailscale IP or hostname), "
+        "api_key (str, required — Bearer token from the Obsidian Local REST API plugin), "
+        "port (int, optional, default 27124). "
+        "Returns: confirmation with node details and reachability."
+    ),
+)
+async def add_remote_node_tool(
+    name: str,
+    host: str,
+    api_key: str,
+    port: int = 27124,
+) -> dict[str, Any]:
+    try:
+        # Evict stale client if one exists
+        if name in _clients:
+            try:
+                await _clients[name].close()
+            except Exception:
+                pass
+            del _clients[name]
+        node = add_remote_node(name, host, api_key, port)
+        client = _get_client(node)
+        reachable = await client.ping()
+        return _success(
+            f"Remote node '{name}' added ({host}:{port}, reachable={reachable})",
+            node={"name": name, "type": "remote", "host": host, "port": port, "reachable": reachable},
         )
     except Exception as e:
         return _error(str(e))
