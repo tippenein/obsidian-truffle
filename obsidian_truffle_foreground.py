@@ -10,7 +10,7 @@ from typing import Any
 import httpx
 from app_runtime.mcp import create_mcp_server, run_mcp_server
 
-from config import NodeConfig, get_node, parse_nodes
+from config import NodeConfig, get_node, parse_nodes, add_node as config_add_node, remove_node as config_remove_node
 from obsidian_client import ObsidianClient
 
 logger = logging.getLogger("obsidian.foreground")
@@ -82,6 +82,67 @@ async def list_nodes() -> dict[str, Any]:
             total=len(results),
             online=online,
         )
+    except Exception as e:
+        return _error(str(e))
+
+
+@mcp.tool(
+    "add_node",
+    description=(
+        "Add or update an Obsidian vault node. Persists across restarts. "
+        "Parameters: name (str, required — friendly label like 'desktop'), "
+        "host (str, required — Tailscale IP or hostname), "
+        "api_key (str, required — Bearer token from the Obsidian Local REST API plugin), "
+        "port (int, optional, default 27124). "
+        "Returns: confirmation with node details."
+    ),
+)
+async def add_node(
+    name: str,
+    host: str,
+    api_key: str,
+    port: int = 27124,
+) -> dict[str, Any]:
+    try:
+        node = config_add_node(name, host, api_key, port)
+        # Evict stale client if one exists
+        if name in _clients:
+            try:
+                await _clients[name].close()
+            except Exception:
+                pass
+            del _clients[name]
+        client = _get_client(node)
+        reachable = await client.ping()
+        return _success(
+            f"Node '{name}' added ({host}:{port}, reachable={reachable})",
+            node={"name": name, "host": host, "port": port, "reachable": reachable},
+        )
+    except Exception as e:
+        return _error(str(e))
+
+
+@mcp.tool(
+    "remove_node",
+    description=(
+        "Remove an Obsidian vault node from the persistent config. "
+        "Parameters: name (str, required — the node name to remove). "
+        "Returns: confirmation or error if node not found."
+    ),
+)
+async def remove_node(name: str) -> dict[str, Any]:
+    try:
+        removed = config_remove_node(name)
+        if not removed:
+            return _error(f"Node '{name}' not found in persistent config")
+        # Clean up client
+        if name in _clients:
+            try:
+                await _clients[name].close()
+            except Exception:
+                pass
+            del _clients[name]
+        return _success(f"Node '{name}' removed")
     except Exception as e:
         return _error(str(e))
 
