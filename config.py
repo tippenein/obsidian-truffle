@@ -15,10 +15,10 @@ logger = logging.getLogger("obsidian.config")
 OBSIDIAN_NODES_RAW: str = os.getenv("OBSIDIAN_NODES", "[]")
 
 # Persistent file for nodes added at runtime via MCP tools
-_NODES_FILE = Path(os.getenv("OBSIDIAN_NODES_FILE", "/data/obsidian_nodes.json"))
+_NODES_FILE = Path(os.getenv("OBSIDIAN_NODES_FILE", "/root/obsidian_nodes.json"))
 
 
-DEFAULT_VAULTS_DIR = Path(os.getenv("OBSIDIAN_VAULTS_DIR", "/data/vaults"))
+DEFAULT_VAULTS_DIR = Path(os.getenv("OBSIDIAN_VAULTS_DIR", "/root/vaults"))
 
 
 @dataclass(frozen=True)

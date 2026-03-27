@@ -103,7 +103,7 @@ async def list_nodes() -> dict[str, Any]:
     description=(
         "Create a new local Obsidian vault on this device. "
         "Parameters: name (str, required — vault label like 'main' or 'work'), "
-        "path (str, optional — custom directory path; defaults to /data/vaults/<name>). "
+        "path (str, optional — custom directory path; defaults to /root/vaults/<name>). "
         "Returns: confirmation with vault path. The vault is immediately usable "
         "with read_note, write_note, search_vault, etc."
     ),
@@ -257,9 +257,12 @@ async def read_note(node_name: str, file_path: str) -> dict[str, Any]:
     "write_note",
     description=(
         "Create, overwrite, or append to a note in an Obsidian vault. "
+        "The write is verified by reading back from disk — if the response "
+        "says 'verified', the note is confirmed persisted; if verification "
+        "fails, the note may not have been saved and you should retry. "
         "Parameters: node_name (str, required), file_path (str, required), "
         "content (str, required), append (bool, optional, default false). "
-        "Returns: confirmation of write."
+        "Returns: confirmation with verified byte count, or error."
     ),
 )
 async def write_note(
@@ -277,7 +280,20 @@ async def write_note(
         else:
             await client.put_file(file_path, content)
             action = "Wrote"
-        return _success(f"{action} {file_path} on {node_name}")
+
+        # Verify the write actually persisted by reading back from disk
+        try:
+            readback = await client.get_file(file_path)
+            persisted_size = len(readback.get("content", ""))
+        except Exception as verify_err:
+            return _error(
+                f"{action} {file_path} on {node_name}, but verification read-back "
+                f"failed — the note may not have been persisted: {verify_err}"
+            )
+
+        return _success(
+            f"{action} {file_path} on {node_name} (verified, {persisted_size} chars on disk)"
+        )
     except httpx.HTTPStatusError as e:
         return _error(f"Obsidian API error: {e.response.status_code}")
     except ValueError as e:
